@@ -17,7 +17,11 @@ const app = express();
 const server = http.createServer(app);
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin:process.env.CLIENT_URL,
+    credentials:true
+}));
+
 app.use(express.json({ limit: '50mb' }));
 
 // Error handling middleware
