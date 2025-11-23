@@ -10,11 +10,11 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 // Database configuration from environment variables
-const dbHost = process.env.DB_HOST || process.env.MYSQLHOST || 'localhost';
-const dbUser = process.env.DB_USER || process.env.MYSQLUSER || 'root';
-const dbPassword = process.env.DB_PASSWORD || process.env.MYSQLPASSWORD || '';
-const dbName = process.env.DB_NAME || process.env.MYSQL_DATABASE || 'event_booking';
-const dbPort = parseInt(process.env.DB_PORT || process.env.MYSQLPORT || 3306, 10);
+const dbHost = process.env.MYSQLHOST || 'localhost';
+const dbUser = process.env.MYSQLUSER || 'root';
+const dbPassword =  process.env.MYSQLPASSWORD || '';
+const dbName = process.env.MYSQL_DATABASE || 'event_booking';
+const dbPort = parseInt(process.env.MYSQLPORT || 3306, 10);
 
 // Check if connecting to Railway (not localhost)
 const isRailway = !dbHost.includes('localhost') && !dbHost.includes('127.0.0.1');
