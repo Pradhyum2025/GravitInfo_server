@@ -10,6 +10,7 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const db = require('./config/db');
+const createTables  = require("./config/createTablesAuto")
 
 dotenv.config();
 
@@ -36,22 +37,21 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 
-// Error handling middleware
+// Error handling middleware By Gravit InfoSystem
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({ message: 'Internal server error', error: err.message });
 });
 
-// Handle unhandled promise rejections
+// Handle unhandled promise rejections By Gravit InfoSystem
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Promise Rejection:', err);
-  // Don't exit the process, just log the error
 });
 
-// Handle uncaught exceptions
+// Handle uncaught exceptions By Gravit InfoSystem
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
-  // Don't exit the process, just log the error
+  
 });
 
 // Socket.IO Setup
@@ -192,9 +192,12 @@ const PORT = process.env.PORT || 5000;
 
 // Test Database Connection
 db.execute('SELECT 1')
-    .then(() => {
+    .then(async () => {
         console.log('Database connected successfully');
         
+        await createTables();
+        console.log("All tables checked/created");
+
         // Verify seats column exists
         db.query('ALTER TABLE bookings ADD COLUMN IF NOT EXISTS seats TEXT')
             .then(() => console.log('Seats column verified'))
@@ -218,10 +221,10 @@ db.execute('SELECT 1')
         console.error('Database connection failed:', err.message);
         console.error('Error code:', err.code);
         console.error('\nCheck your .env file:');
-        console.error('  DB_HOST=hopper.proxy.rlwy.net');
-        console.error('  DB_PORT=29337');
-        console.error('  DB_USER=root');
-        console.error('  DB_PASSWORD=your-password');
-        console.error('  DB_NAME=railway');
+        console.error('DB_HOST=hopper.proxy.rlwy.net');
+        console.error('DB_PORT=29337');
+        console.error('DB_USER=root');
+        console.error('DB_PASSWORD=your-password');
+        console.error('DB_NAME=railway');
         process.exit(1);
     });

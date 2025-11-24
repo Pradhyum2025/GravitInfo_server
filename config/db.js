@@ -41,11 +41,11 @@ if (isRailway) {
 }
 
 console.log('Database Configuration:');
-console.log(`  Host: ${dbConfig.host}`);
-console.log(`  User: ${dbConfig.user}`);
-console.log(`  Database: ${dbConfig.database}`);
-console.log(`  Port: ${dbConfig.port}`);
-console.log(`  SSL: ${dbConfig.ssl ? 'Enabled' : 'Disabled'}`);
+// console.log(`  Host: ${dbConfig.host}`);
+// console.log(`  User: ${dbConfig.user}`);
+// console.log(`  Database: ${dbConfig.database}`);
+// console.log(`  Port: ${dbConfig.port}`);
+// console.log(`  SSL: ${dbConfig.ssl ? 'Enabled' : 'Disabled'}`);
 
 const pool = mysql.createPool(dbConfig);
 
