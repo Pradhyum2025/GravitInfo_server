@@ -195,7 +195,7 @@ db.execute('SELECT 1')
     .then(async () => {
         console.log('Database connected successfully');
         
-        await createTables();
+        await createTables(db);
         console.log("All tables checked/created");
 
         // Verify seats column exists
