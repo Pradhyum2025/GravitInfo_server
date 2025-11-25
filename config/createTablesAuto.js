@@ -1,3 +1,10 @@
+// ---------------------------------------------------------------------
+// <copyright file="createTablesAuto.js" company="Gravit InfoSystem">
+// Copyright (c) Gravit InfoSystem. All rights reserved.
+// </copyright>
+// ---------------------------------------------------------------------
+
+//Created Tables automatically by Gravit InfoSystem
 async function createTables(db) {
   try {
     await db.execute(`
@@ -11,7 +18,7 @@ async function createTables(db) {
       )
     `);
 
-    console.log("Users table OK");
+    console.log("Users Table Created Automatically by Gravit InfoSystem");
 
     await db.execute(`
       CREATE TABLE IF NOT EXISTS events (
@@ -29,7 +36,7 @@ async function createTables(db) {
       )
     `);
 
-    console.log("Events table OK");
+    console.log("Events Table Created Automatically by Gravit InfoSystem");
 
     await db.execute(`
       CREATE TABLE IF NOT EXISTS bookings (
@@ -49,11 +56,11 @@ async function createTables(db) {
       )
     `);
 
-    console.log("Bookings table OK");
+    console.log("Bookings Table Created Automatically by Gravit InfoSystem");
 
   } catch (err) {
-    console.error("Migration Error:", err);
+    console.error("Migration Error : ", err);
   }
 }
 
-module.exports = createTables;
+export default createTables;

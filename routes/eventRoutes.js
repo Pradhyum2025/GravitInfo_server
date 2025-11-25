@@ -4,14 +4,23 @@
 // </copyright>
 // ---------------------------------------------------------------------
 
-const express = require('express');
+import express from 'express';
+import {
+    getAllEvents,
+    getEventById,
+    createEvent,
+    updateEvent,
+    deleteEvent
+} from '../controllers/eventController.js';
+import { authenticateToken } from '../middleware/authMiddleware.js';
+import { authorizeRole } from '../middleware/roleMiddleware.js';
+
 const router = express.Router();
-const eventController = require('../controllers/eventController');
 
-router.get('/', eventController.getAllEvents);
-router.get('/:id', eventController.getEventById);
-router.post('/', eventController.createEvent);
-router.put('/:id', eventController.updateEvent);
-router.delete('/:id', eventController.deleteEvent);
+router.get('/', getAllEvents);
+router.get('/:id', getEventById);
+router.post('/', authenticateToken, authorizeRole('admin'), createEvent);
+router.put('/:id', authenticateToken, authorizeRole('admin'), updateEvent);
+router.delete('/:id', authenticateToken, authorizeRole('admin'), deleteEvent);
 
-module.exports = router;
+export default router;

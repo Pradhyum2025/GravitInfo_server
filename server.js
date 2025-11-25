@@ -4,19 +4,21 @@
 // </copyright>
 // ---------------------------------------------------------------------
 
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const db = require('./config/db');
-const createTables  = require("./config/createTablesAuto")
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import db from './config/db.js';
+import createTables from './config/createTablesAuto.js';
+import authRoutes from './routes/authRoutes.js';
+import eventRoutes from './routes/eventRoutes.js';
+import bookingRoutes from './routes/bookingRoutes.js';
 
 dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
-
 
 const allowedOrigins = [
   "https://gravit-info-client.vercel.app",
@@ -34,13 +36,15 @@ app.use(cors({
   credentials: true
 }));
 
-
 app.use(express.json({ limit: '50mb' }));
 
 // Error handling middleware By Gravit InfoSystem
 app.use((err, req, res, next) => {
   console.error('Error:', err);
-  res.status(500).json({ message: 'Internal server error', error: err.message });
+  return res.status(500).json({
+    success: false,
+    message: err?.message || 'Internal server error'
+  });
 });
 
 // Handle unhandled promise rejections By Gravit InfoSystem
@@ -51,7 +55,6 @@ process.on('unhandledRejection', (err) => {
 // Handle uncaught exceptions By Gravit InfoSystem
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
-  
 });
 
 // Socket.IO Setup
@@ -63,9 +66,10 @@ const io = new Server(server, {
 });
 
 // Routes
-app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/events', require('./routes/eventRoutes'));
-app.use('/api/bookings', require('./routes/bookingRoutes'));
+
+app.use('/api/auth', authRoutes);
+app.use('/api/events', eventRoutes);
+app.use('/api/bookings', bookingRoutes);
 
 // Socket.IO Logic with lock expiration
 const lockedSeats = {}; // { eventId: { seatIndex: { userId, timestamp } } }
@@ -170,22 +174,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// Note: Error handlers are already defined above, these are duplicates - keeping them for safety
-// Handle unhandled promise rejections (duplicate - already handled above)
-process.on('unhandledRejection', (err) => {
-    console.error('Unhandled Promise Rejection (duplicate handler):', err);
-    // Don't exit - let the server continue
-});
-
-// Handle uncaught exceptions (duplicate - already handled above)
-process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception (duplicate handler):', err);
-    // Don't exit immediately - log and try to continue
-    // Only exit if it's a critical error
-    if (err.code === 'ECONNREFUSED' || err.message.includes('EADDRINUSE')) {
-        process.exit(1);
-    }
-});
 
 // Start Server
 const PORT = process.env.PORT || 5000;
@@ -198,10 +186,6 @@ db.execute('SELECT 1')
         await createTables(db);
         console.log("All tables checked/created");
 
-        // Verify seats column exists
-        db.query('ALTER TABLE bookings ADD COLUMN IF NOT EXISTS seats TEXT')
-            .then(() => console.log('Seats column verified'))
-            .catch(() => console.log('Seats column check skipped'));
         
         // Start server
         server.listen(PORT, () => {

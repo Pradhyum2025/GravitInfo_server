@@ -4,49 +4,49 @@
 // </copyright>
 // ---------------------------------------------------------------------
 
-const mysql = require('mysql2');
-const dotenv = require('dotenv');
+import mysql from "mysql2";
+import dotenv from "dotenv";
 
 dotenv.config();
 
-// Database configuration from environment variables
-const dbHost = process.env.MYSQLHOST || 'localhost';
-const dbUser = process.env.MYSQLUSER || 'root';
-const dbPassword =  process.env.MYSQLPASSWORD || '';
-const dbName = process.env.MYSQL_DATABASE || 'event_booking';
-const dbPort = parseInt(process.env.MYSQLPORT || 3306, 10);
+const dbHost = process.env.MYSQLHOST || "localhost";
+const dbUser = process.env.MYSQLUSER || "root";
+const dbPassword = process.env.MYSQLPASSWORD || "";
+const dbName = process.env.MYSQL_DATABASE || "event_booking";
+const dbPort = Number(process.env.MYSQLPORT) || 3306;
 
-// Check if connecting to Railway (not localhost)
-const isRailway = !dbHost.includes('localhost') && !dbHost.includes('127.0.0.1');
+const isCloudDB =
+  !dbHost.includes("localhost") && !dbHost.includes("127.0.0.1");
 
 const dbConfig = {
-    host: dbHost,
-    user: dbUser,
-    password: dbPassword,
-    database: dbName,
-    port: dbPort,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    connectTimeout: 60000,
-    enableKeepAlive: true,
-    keepAliveInitialDelay: 0
+  host: dbHost,
+  user: dbUser,
+  password: dbPassword,
+  database: dbName,
+  port: dbPort,
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  connectTimeout: 60000,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0,
 };
 
-// Enable SSL for Railway connections
-if (isRailway) {
-    dbConfig.ssl = {
-        rejectUnauthorized: false
-    };
+
+if (isCloudDB) {
+  dbConfig.ssl = { rejectUnauthorized: false };
 }
 
-console.log('Database Configuration:');
-// console.log(`  Host: ${dbConfig.host}`);
-// console.log(`  User: ${dbConfig.user}`);
-// console.log(`  Database: ${dbConfig.database}`);
-// console.log(`  Port: ${dbConfig.port}`);
-// console.log(`  SSL: ${dbConfig.ssl ? 'Enabled' : 'Disabled'}`);
+
+console.log("Database Configuration Loaded:", {
+  host: dbHost,
+  user: dbUser,
+  database: dbName,
+  port: dbPort,
+  ssl: isCloudDB ? "ENABLED" : "DISABLED",
+});
+
 
 const pool = mysql.createPool(dbConfig);
 
-module.exports = pool.promise();
+export default pool.promise();

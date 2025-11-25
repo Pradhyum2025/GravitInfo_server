@@ -4,16 +4,24 @@
 // </copyright>
 // ---------------------------------------------------------------------
 
-const express = require('express');
+import express from 'express';
+import {
+    createBooking,
+    getUserBookings,
+    getBookingById,
+    getAllBookings,
+    updateBooking
+} from '../controllers/bookingController.js';
+import { authenticateToken } from '../middleware/authMiddleware.js';
+import { authorizeRole } from '../middleware/roleMiddleware.js';
+import { checkUserRole, checkEventStatus } from '../middleware/bookingMiddleware.js';
+
 const router = express.Router();
-const bookingController = require('../controllers/bookingController');
-const { checkUserRole, checkEventStatus } = require('../middleware/bookingMiddleware');
 
-// Apply middleware to prevent admin bookings and closed event bookings
-router.post('/', checkUserRole, checkEventStatus, bookingController.createBooking);
-router.get('/user/:userId', bookingController.getUserBookings);
-router.get('/:id', bookingController.getBookingById);
-router.get('/', bookingController.getAllBookings);
-router.put('/:id', bookingController.updateBooking);
+router.post('/', authenticateToken, checkUserRole, checkEventStatus, createBooking);
+router.get('/', authenticateToken, getAllBookings);
+router.get('/user/:userId', authenticateToken, getUserBookings);
+router.get('/:id', authenticateToken, getBookingById);
+router.put('/:id', authenticateToken, authorizeRole('admin'), updateBooking);
 
-module.exports = router;
+export default router;

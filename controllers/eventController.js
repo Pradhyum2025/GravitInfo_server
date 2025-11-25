@@ -4,133 +4,153 @@
 // </copyright>
 // ---------------------------------------------------------------------
 
-const db = require('../config/db');
+import db from '../config/db.js';
 
-exports.getAllEvents = async (req, res) => {
+const transformEvent = (event) => ({
+    id: event.id,
+    title: event.title,
+    description: event.description,
+    location: event.location,
+    date: event.date,
+    totalSeats: event.total_seats,
+    availableSeats: event.available_seats,
+    price: event.price,
+    status: event.status || 'upcoming',
+    image: event.img
+});
+
+export const getAllEvents = async (req, res) => {
     try {
         const [events] = await db.query('SELECT * FROM events ORDER BY date ASC');
-        // Transform to camelCase for frontend
-        const transformedEvents = events.map(event => ({
-            id: event.id,
-            title: event.title,
-            description: event.description,
-            location: event.location,
-            date: event.date,
-            totalSeats: event.total_seats,
-            availableSeats: event.available_seats,
-            price: event.price,
-            status: event.status || 'upcoming',
-            image: event.img
-        }));
-        res.json(transformedEvents);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
-    }
-};
-
-exports.getEventById = async (req, res) => {
-    const { id } = req.params;
-    try {
-        const [events] = await db.query('SELECT * FROM events WHERE id = ?', [id]);
-        if (events.length === 0) {
-            return res.status(404).json({ message: 'Event not found' });
-        }
-        const event = events[0];
-        // Transform to camelCase
-        res.json({
-            id: event.id,
-            title: event.title,
-            description: event.description,
-            location: event.location,
-            date: event.date,
-            totalSeats: event.total_seats,
-            availableSeats: event.available_seats,
-            price: event.price,
-            status: event.status || 'upcoming',
-            image: event.img
+        const transformedEvents = events.map(transformEvent);
+        
+        return res.status(200).json({
+            success: true,
+            message: 'Events fetched successfully',
+            data: transformedEvents
         });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Get all events error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while fetching events'
+        });
     }
 };
 
-exports.createEvent = async (req, res) => {
-    // Support both camelCase (frontend) and snake_case
-    const { title, description, location, date, totalSeats, total_seats, price, image, img, status } = req.body;
-    const total_seats_val = totalSeats || total_seats;
-    const img_val = image || img;
-
-    // Validation
-    if (!title || !date || !total_seats_val || !price) {
-        return res.status(400).json({ message: 'Please fill all required fields' });
-    }
-
+export const getEventById = async (req, res) => {
     try {
+        const { id } = req.params;
+        const [events] = await db.query('SELECT * FROM events WHERE id = ?', [id]);
+        
+        if (events.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Event not found'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: 'Event fetched successfully',
+            data: transformEvent(events[0])
+        });
+    } catch (error) {
+        console.error('Get event by id error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while fetching event'
+        });
+    }
+};
+
+export const createEvent = async (req, res) => {
+    try {
+        const { title, description, location, date, totalSeats, price, image, status } = req.body;
+
+        if (!title || !date || !totalSeats || !price) {
+            return res.status(400).json({
+                success: false,
+                message: 'Title, date, totalSeats, and price are required'
+            });
+        }
+
         const [result] = await db.query(
             'INSERT INTO events (title, description, location, date, total_seats, available_seats, price, img, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [title, description, location, date, total_seats_val, total_seats_val, price, img_val, status || 'upcoming']
+            [title, description || null, location || null, date, totalSeats, totalSeats, price, image || null, status || 'upcoming']
         );
+
         const [newEvent] = await db.query('SELECT * FROM events WHERE id = ?', [result.insertId]);
-        const event = newEvent[0];
-        res.status(201).json({
-            id: event.id,
-            title: event.title,
-            description: event.description,
-            location: event.location,
-            date: event.date,
-            totalSeats: event.total_seats,
-            availableSeats: event.available_seats,
-            price: event.price,
-            status: event.status || 'upcoming',
-            image: event.img
+
+        return res.status(201).json({
+            success: true,
+            message: 'Event created successfully',
+            data: transformEvent(newEvent[0])
         });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Create event error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while creating event'
+        });
     }
 };
 
-exports.updateEvent = async (req, res) => {
-    const { id } = req.params;
-    // Support both camelCase and snake_case
-    const { title, description, location, date, totalSeats, total_seats, price, status, image, img } = req.body;
-    const total_seats_val = totalSeats || total_seats;
-    const img_val = image || img;
-
+export const updateEvent = async (req, res) => {
     try {
+        const { id } = req.params;
+        const { title, description, location, date, totalSeats, price, status, image } = req.body;
+
         await db.query(
             'UPDATE events SET title = ?, description = ?, location = ?, date = ?, total_seats = ?, price = ?, status = ?, img = ? WHERE id = ?',
-            [title, description, location, date, total_seats_val, price, status, img_val, id]
+            [title, description, location, date, totalSeats, price, status, image, id]
         );
+
         const [updated] = await db.query('SELECT * FROM events WHERE id = ?', [id]);
-        const event = updated[0];
-        res.json({
-            id: event.id,
-            title: event.title,
-            description: event.description,
-            location: event.location,
-            date: event.date,
-            totalSeats: event.total_seats,
-            availableSeats: event.available_seats,
-            price: event.price,
-            status: event.status || 'upcoming',
-            image: event.img
+        
+        if (updated.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Event not found'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: 'Event updated successfully',
+            data: transformEvent(updated[0])
         });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Update event error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while updating event'
+        });
     }
 };
 
-exports.deleteEvent = async (req, res) => {
-    const { id } = req.params;
+export const deleteEvent = async (req, res) => {
     try {
-        await db.query('DELETE FROM events WHERE id = ?', [id]);
-        res.json({ message: 'Event deleted' });
+        const { id } = req.params;
+        
+        const [result] = await db.query('DELETE FROM events WHERE id = ?', [id]);
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'Event not found'
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: 'Event deleted successfully'
+        });
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Delete event error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while deleting event'
+        });
     }
 };

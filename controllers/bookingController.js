@@ -4,502 +4,409 @@
 // </copyright>
 // ---------------------------------------------------------------------
 
-const db = require('../config/db');
+import db from '../config/db.js';
 
-exports.createBooking = async (req, res) => {
-    // Support both camelCase (frontend) and snake_case
-    const { eventId, event_id, userId, user_id, seats, quantity, totalAmount, total_amount, name, email, mobile } = req.body;
-    const event_id_val = eventId || event_id;
-    const user_id_val = userId || user_id;
-    const seatsArray = Array.isArray(seats) ? seats : (seats ? [seats] : []);
-    const quantity_val = quantity || seatsArray.length;
-    const total_amount_val = totalAmount || total_amount || 0;
-
-    if (!event_id_val || !user_id_val || !quantity_val || seatsArray.length === 0) {
-        return res.status(400).json({ message: 'Missing required fields: eventId, userId, and seats are required' });
-    }
-
-    if (!total_amount_val || total_amount_val <= 0) {
-        return res.status(400).json({ message: 'Total amount is required and must be greater than 0' });
-    }
-
-    // Additional security check: Verify user is not admin (backup check)
-    try {
-        const [users] = await db.query('SELECT role FROM users WHERE id = ?', [user_id_val]);
-        if (users.length > 0 && users[0].role === 'admin') {
-            return res.status(403).json({ 
-                message: 'Admins cannot book tickets. Please sign in as a user to make bookings.' 
-            });
+const parseSeats = (seats) => {
+    if (!seats) return [];
+    if (Array.isArray(seats)) return seats.map(s => Number(s)).filter(s => !isNaN(s) && s > 0);
+    if (typeof seats === 'string') {
+        try {
+            const parsed = JSON.parse(seats);
+            return Array.isArray(parsed) ? parsed.map(s => Number(s)).filter(s => !isNaN(s) && s > 0) : [];
+        } catch {
+            return seats.split(',').map(s => Number(s.trim())).filter(s => !isNaN(s) && s > 0);
         }
-    } catch (userCheckError) {
-        console.error('Error checking user role in controller:', userCheckError);
-        // Continue with booking if check fails (middleware should have caught it)
+    }
+    return [];
+};
+
+const getBookedSeats = async (connection, eventId) => {
+    const bookedSeats = new Set();
+    try {
+        const [bookings] = await connection.execute(
+            'SELECT seats FROM bookings WHERE event_id = ? AND seats IS NOT NULL',
+            [eventId]
+        );
+        bookings.forEach(booking => {
+            const seats = parseSeats(booking.seats);
+            seats.forEach(seat => bookedSeats.add(seat));
+        });
+    } catch (err) {
+        if (err.code !== 'ER_BAD_FIELD_ERROR') throw err;
+    }
+    return bookedSeats;
+};
+
+const transformBooking = (booking) => {
+    const seats = parseSeats(booking.seats);
+    return {
+        id: booking.id,
+        eventId: Number(booking.event_id),
+        userId: Number(booking.user_id),
+        seats,
+        quantity: booking.quantity,
+        totalAmount: Number(booking.total_amount),
+        status: booking.status || 'pending',
+        createdAt: booking.booking_date || booking.created_at,
+        name: booking.name,
+        email: booking.email,
+        mobile: booking.mobile
+    };
+};
+
+export const createBooking = async (req, res) => {
+    const { eventId, seats, quantity, totalAmount, name, email, mobile } = req.body;
+    const userId = req.user.id;
+    
+    if (!eventId || !seats || !totalAmount) {
+        return res.status(400).json({
+            success: false,
+            message: 'EventId, seats, and totalAmount are required'
+        });
+    }
+
+    const seatsArray = parseSeats(seats);
+    const quantityVal = quantity || seatsArray.length;
+
+    if (seatsArray.length === 0) {
+        return res.status(400).json({
+            success: false,
+            message: 'At least one valid seat is required'
+        });
+    }
+
+    if (totalAmount <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: 'Total amount must be greater than 0'
+        });
     }
 
     let connection;
     try {
         connection = await db.getConnection();
-        if (!connection) {
-            return res.status(500).json({ message: 'Database connection failed' });
-        }
         await connection.beginTransaction();
 
-        // Check if seats column exists
-        let hasSeatsColumn = false;
-        try {
-            await connection.execute('SELECT seats FROM bookings LIMIT 1');
-            hasSeatsColumn = true;
-        } catch (err) {
-            if (err.code === 'ER_BAD_FIELD_ERROR') {
-                hasSeatsColumn = false;
-            } else {
-                throw err;
-            }
-        }
+        const [events] = await connection.execute(
+            'SELECT * FROM events WHERE id = ? FOR UPDATE',
+            [eventId]
+        );
 
-        // Check if user already has a booking for this event (prevent duplicate bookings)
-        const query = hasSeatsColumn 
-            ? 'SELECT id, seats FROM bookings WHERE event_id = ? AND user_id = ?'
-            : 'SELECT id FROM bookings WHERE event_id = ? AND user_id = ?';
-        
-        const [existingUserBookings] = await connection.execute(query, [event_id_val, user_id_val]);
-
-        if (existingUserBookings.length > 0 && hasSeatsColumn) {
-            // Check if user is trying to book the same seats
-            const existingSeats = new Set();
-            existingUserBookings.forEach(booking => {
-                try {
-                    const bookedSeats = booking.seats ? (typeof booking.seats === 'string' ? JSON.parse(booking.seats) : booking.seats) : [];
-                    if (Array.isArray(bookedSeats)) {
-                        bookedSeats.forEach(seat => existingSeats.add(Number(seat)));
-                    }
-                } catch (e) {
-                    // Ignore parsing errors
-                }
-            });
-
-            const duplicateSeats = seatsArray.filter(seat => existingSeats.has(Number(seat)));
-            if (duplicateSeats.length > 0) {
-                await connection.rollback();
-                return res.status(400).json({ 
-                    message: `You have already booked seats ${duplicateSeats.join(', ')} for this event.` 
-                });
-            }
-        }
-
-        // Check availability and get event (FOR UPDATE locks the row)
-        const [events] = await connection.execute('SELECT * FROM events WHERE id = ? FOR UPDATE', [event_id_val]);
         if (events.length === 0) {
             await connection.rollback();
-            return res.status(404).json({ message: 'Event not found' });
+            return res.status(404).json({
+                success: false,
+                message: 'Event not found'
+            });
         }
+
         const event = events[0];
 
-        // Additional security check: Verify event is not closed (backup check)
         if (event.status === 'closed') {
             await connection.rollback();
-            return res.status(403).json({ 
-                message: 'This event is closed. Bookings are no longer available.' 
+            return res.status(403).json({
+                success: false,
+                message: 'This event is closed. Bookings are no longer available.'
             });
         }
 
-        // Check if event is closed (all seats booked)
-        if (event.available_seats <= 0) {
+        if (event.available_seats < quantityVal) {
             await connection.rollback();
-            return res.status(400).json({ message: 'Event is fully booked. Registration is closed.' });
+            return res.status(400).json({
+                success: false,
+                message: 'Not enough seats available'
+            });
         }
 
-        // Validate seats are still available (BACKEND VALIDATION - Only backend modifies seat count)
-        let allBookedSeats = new Set();
-        if (hasSeatsColumn) {
-            try {
-                const [existingBookings] = await connection.execute(
-                    'SELECT seats FROM bookings WHERE event_id = ? AND seats IS NOT NULL',
-                    [event_id_val]
-                );
+        const allBookedSeats = await getBookedSeats(connection, eventId);
+        const conflictingSeats = seatsArray.filter(seat => allBookedSeats.has(seat));
 
-                existingBookings.forEach(booking => {
-                    try {
-                        const bookedSeats = booking.seats ? (typeof booking.seats === 'string' ? JSON.parse(booking.seats) : booking.seats) : [];
-                        if (Array.isArray(bookedSeats)) {
-                            bookedSeats.forEach(seat => allBookedSeats.add(Number(seat)));
-                        }
-                    } catch (e) {
-                        // Ignore parsing errors
-                    }
-                });
-            } catch (err) {
-                // If seats column doesn't exist, skip seat conflict check
-                if (err.code !== 'ER_BAD_FIELD_ERROR') {
-                    throw err;
-                }
-            }
+        if (conflictingSeats.length > 0) {
+            await connection.rollback();
+            return res.status(400).json({
+                success: false,
+                message: `Seats ${conflictingSeats.join(', ')} are already booked. Please select different seats.`
+            });
         }
 
-        // Check if any requested seat is already booked
-        if (allBookedSeats.size > 0) {
-            const conflictingSeats = seatsArray.filter(seat => allBookedSeats.has(Number(seat)));
-            if (conflictingSeats.length > 0) {
-                await connection.rollback();
-                return res.status(400).json({ 
-                    message: `Seats ${conflictingSeats.join(', ')} are already booked. Please select different seats.` 
-                });
-            }
-        }
-
-        // Validate seat numbers are within range
-        const totalSeats = event.total_seats || event.totalSeats || 50;
-        const invalidSeats = seatsArray.filter(seat => Number(seat) < 1 || Number(seat) > totalSeats);
+        const invalidSeats = seatsArray.filter(seat => seat < 1 || seat > event.total_seats);
         if (invalidSeats.length > 0) {
             await connection.rollback();
-            return res.status(400).json({ 
-                message: `Invalid seat numbers: ${invalidSeats.join(', ')}. Seats must be between 1 and ${totalSeats}.` 
+            return res.status(400).json({
+                success: false,
+                message: `Invalid seat numbers: ${invalidSeats.join(', ')}. Seats must be between 1 and ${event.total_seats}.`
             });
         }
 
-        // Check if enough seats are available (BACKEND ONLY MODIFIES SEAT COUNT)
-        if (event.available_seats < quantity_val) {
-            await connection.rollback();
-            return res.status(400).json({ message: 'Not enough seats available' });
-        }
+        const [existingBookings] = await connection.execute(
+            'SELECT id, seats FROM bookings WHERE event_id = ? AND user_id = ?',
+            [eventId, userId]
+        );
 
-        // BACKEND MODIFIES SEAT COUNT - Update available seats atomically
-        await connection.execute('UPDATE events SET available_seats = available_seats - ? WHERE id = ?', [quantity_val, event_id_val]);
+        if (existingBookings.length > 0) {
+            const userBookedSeats = new Set();
+            existingBookings.forEach(booking => {
+                const seats = parseSeats(booking.seats);
+                seats.forEach(seat => userBookedSeats.add(seat));
+            });
 
-        // Verify the update was successful
-        const [updatedEvent] = await connection.execute('SELECT available_seats FROM events WHERE id = ?', [event_id_val]);
-        if (updatedEvent[0].available_seats < 0) {
-            await connection.rollback();
-            return res.status(400).json({ message: 'Seat count validation failed. Please try again.' });
-        }
-
-        // Create booking - store seats as JSON string
-        const seatsJson = JSON.stringify(seatsArray);
-        
-        // Get user info first to fill in missing fields
-        let user = {};
-        try {
-            const [users] = await connection.execute('SELECT name, email FROM users WHERE id = ?', [user_id_val]);
-            user = users && users.length > 0 ? users[0] : {};
-        } catch (userError) {
-            console.error('Error fetching user info:', userError);
-            // Continue without user info - use provided values or null
-        }
-        
-        // Ensure no undefined values (convert to null)
-        const name_val = name || user.name || null;
-        const email_val = email || user.email || null;
-        const mobile_val = mobile || null;
-        
-        let result;
-        try {
-            // Try to insert with seats column first
-            [result] = await connection.execute(
-                'INSERT INTO bookings (event_id, user_id, name, email, mobile, quantity, total_amount, seats) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                [event_id_val, user_id_val, name_val, email_val, mobile_val, quantity_val, total_amount_val, seatsJson]
-            );
-        } catch (err) {
-            // If seats column doesn't exist, insert without it
-            if (err.code === 'ER_BAD_FIELD_ERROR' || err.message.includes('seats')) {
-                [result] = await connection.execute(
-                    'INSERT INTO bookings (event_id, user_id, name, email, mobile, quantity, total_amount) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                    [event_id_val, user_id_val, name_val, email_val, mobile_val, quantity_val, total_amount_val]
-                );
-            } else {
-                throw err; // Re-throw if it's a different error
+            const duplicateSeats = seatsArray.filter(seat => userBookedSeats.has(seat));
+            if (duplicateSeats.length > 0) {
+                await connection.rollback();
+                return res.status(400).json({
+                    success: false,
+                    message: `You have already booked seats ${duplicateSeats.join(', ')} for this event.`
+                });
             }
         }
+
+        await connection.execute(
+            'UPDATE events SET available_seats = available_seats - ? WHERE id = ?',
+            [quantityVal, eventId]
+        );
+
+        const [updatedEvent] = await connection.execute(
+            'SELECT available_seats FROM events WHERE id = ?',
+            [eventId]
+        );
+
+        if (updatedEvent[0].available_seats < 0) {
+            await connection.rollback();
+            return res.status(400).json({
+                success: false,
+                message: 'Seat count validation failed. Please try again.'
+            });
+        }
+
+        const [users] = await connection.execute(
+            'SELECT name, email FROM users WHERE id = ?',
+            [userId]
+        );
+        const user = users[0] || {};
+
+        const seatsJson = JSON.stringify(seatsArray);
+        
+        const [result] = await connection.execute(
+            'INSERT INTO bookings (event_id, user_id, name, email, mobile, quantity, total_amount, seats) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                eventId,
+                userId,
+                name || user.name || null,
+                email || user.email || null,
+                mobile || null,
+                quantityVal,
+                totalAmount,
+                seatsJson
+            ]
+        );
 
         await connection.commit();
 
-        // Return booking in camelCase
         const booking = {
             id: result.insertId,
-            eventId: event_id_val,
-            userId: user_id_val,
+            eventId,
+            userId,
             seats: seatsArray,
-            quantity: quantity_val,
-            totalAmount: total_amount_val,
+            quantity: quantityVal,
+            totalAmount,
             status: 'confirmed',
             createdAt: new Date().toISOString(),
-            name: name_val,
-            email: email_val
+            name: name || user.name || null,
+            email: email || user.email || null
         };
 
-        res.status(201).json(booking);
+        return res.status(201).json({
+            success: true,
+            message: 'Booking created successfully',
+            data: booking
+        });
     } catch (error) {
         if (connection) {
             try {
                 await connection.rollback();
             } catch (rollbackError) {
-                console.error('Rollback error:', rollbackError);
+                console.error('Rollback error:', rollbackError?.message);
             }
         }
-        console.error('Booking error:', error);
-        console.error('Error stack:', error.stack);
-        
-        // Don't expose internal errors to client
-        const errorMessage = process.env.NODE_ENV === 'development' 
-            ? error.message 
-            : 'An error occurred while processing your booking. Please try again.';
-        
-        res.status(500).json({ 
-            message: 'Server error', 
-            error: errorMessage 
+        console.error('Create booking error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while creating booking'
         });
     } finally {
         if (connection) {
             try {
                 connection.release();
             } catch (releaseError) {
-                console.error('Error releasing connection:', releaseError);
+                console.error('Error releasing connection:', releaseError?.message);
             }
         }
     }
 };
 
-exports.getAllBookings = async (req, res) => {
+export const getAllBookings = async (req, res) => {
     try {
-        const { userId, eventId } = req.query;
+        const { eventId, userId: queryUserId } = req.query;
         
-        // Check if seats column exists first
-        let hasSeatsColumn = true;
-        try {
-            await db.query('SELECT seats FROM bookings LIMIT 1');
-        } catch (err) {
-            if (err.code === 'ER_BAD_FIELD_ERROR' || err.code === 'ER_NO_SUCH_TABLE') {
-                hasSeatsColumn = false;
-            } else {
-                console.error('Error checking seats column:', err);
-                // Continue anyway, assume column doesn't exist
-                hasSeatsColumn = false;
-            }
+        // If no filters and user is not admin, deny access
+        if (!eventId && !queryUserId && req.user.role !== 'admin') {
+            return res.status(403).json({
+                success: false,
+                message: 'Access denied. Admin access required to view all bookings'
+            });
         }
         
-        // Build query - include seats column only if it exists
-        let query = hasSeatsColumn 
-            ? 'SELECT b.*, e.title, e.date, e.location, e.img FROM bookings b JOIN events e ON b.event_id = e.id'
-            : 'SELECT b.id, b.event_id, b.user_id, b.quantity, b.total_amount, b.status, b.booking_date, b.name, b.email, b.mobile, e.title, e.date, e.location, e.img FROM bookings b JOIN events e ON b.event_id = e.id';
-        
+        let query = 'SELECT b.*, e.title, e.date, e.location, e.img FROM bookings b JOIN events e ON b.event_id = e.id';
         const params = [];
         const conditions = [];
-        
-        if (userId) {
-            conditions.push('b.user_id = ?');
-            params.push(userId);
+
+        if (queryUserId) {
+            if (req.user.role === 'admin') {
+                // Admins can query any user's bookings
+                conditions.push('b.user_id = ?');
+                params.push(queryUserId);
+            } else if (Number(queryUserId) === req.user.id) {
+                // Users can only query their own bookings
+                conditions.push('b.user_id = ?');
+                params.push(queryUserId);
+            } else {
+                return res.status(403).json({
+                    success: false,
+                    message: 'You can only view your own bookings'
+                });
+            }
         }
-        
+
         if (eventId) {
+            // Anyone authenticated can view bookings for an event (to see booked seats)
             conditions.push('b.event_id = ?');
             params.push(eventId);
         }
-        
+
         if (conditions.length > 0) {
             query += ' WHERE ' + conditions.join(' AND ');
         }
-        
+
         query += ' ORDER BY b.booking_date DESC';
-        
-        let bookings = [];
-        try {
-            const [results] = await db.query(query, params);
-            bookings = results || [];
-        } catch (queryError) {
-            console.error('Database query error:', queryError);
-            console.error('Query:', query);
-            console.error('Params:', params);
-            throw queryError;
-        }
-        
-        // Transform to camelCase
-        const transformed = bookings.map(booking => {
-            let seatsArray = [];
-            try {
-                // Only try to parse seats if column exists and has value
-                if (hasSeatsColumn && booking.seats !== undefined && booking.seats !== null && booking.seats !== '') {
-                    if (typeof booking.seats === 'string') {
-                        try {
-                            seatsArray = JSON.parse(booking.seats);
-                        } catch (parseError) {
-                            // Try comma-separated format
-                            seatsArray = booking.seats.split(',').map(s => s.trim()).filter(Boolean);
-                        }
-                    } else if (Array.isArray(booking.seats)) {
-                        seatsArray = booking.seats;
-                    }
-                    // Convert to numbers and filter valid seats
-                    seatsArray = seatsArray.map(seat => Number(seat)).filter(seat => !isNaN(seat) && seat > 0);
-                }
-            } catch (e) {
-                console.error('Error parsing seats for booking', booking.id, ':', e.message);
-                seatsArray = [];
-            }
-            return {
-                id: booking.id,
-                eventId: Number(booking.event_id),
-                userId: Number(booking.user_id),
-                seats: seatsArray,
-                quantity: booking.quantity,
-                totalAmount: booking.total_amount,
-                status: booking.status || 'pending',
-                createdAt: booking.booking_date || booking.created_at,
-                name: booking.name,
-                email: booking.email,
-                mobile: booking.mobile
-            };
+
+        const [bookings] = await db.query(query, params);
+        const transformed = bookings.map(transformBooking);
+
+        return res.status(200).json({
+            success: true,
+            message: 'Bookings fetched successfully',
+            data: transformed
         });
-        
-        res.json(transformed);
     } catch (error) {
-        console.error('Get bookings error:', error);
-        console.error('Error stack:', error.stack);
-        res.status(500).json({ 
-            message: 'Server error', 
-            error: error.message,
-            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        console.error('Get all bookings error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while fetching bookings'
         });
     }
 };
 
-exports.getUserBookings = async (req, res) => {
-    const { userId } = req.params;
+export const getUserBookings = async (req, res) => {
     try {
-        let hasSeatsColumn = true;
-        try {
-            await db.query('SELECT seats FROM bookings LIMIT 1');
-        } catch (err) {
-            if (err.code === 'ER_BAD_FIELD_ERROR') hasSeatsColumn = false;
-            else throw err;
+        const userId = req.user.id;
+        const requestedUserId = req.params.userId;
+        
+        if (requestedUserId && req.user.role !== 'admin' && Number(requestedUserId) !== userId) {
+            return res.status(403).json({
+                success: false,
+                message: 'You can only view your own bookings'
+            });
         }
         
-        const query = hasSeatsColumn
-            ? 'SELECT b.*, e.title, e.date, e.location, e.img FROM bookings b JOIN events e ON b.event_id = e.id WHERE b.user_id = ? ORDER BY b.booking_date DESC'
-            : 'SELECT b.id, b.event_id, b.user_id, b.quantity, b.total_amount, b.status, b.booking_date, b.name, b.email, b.mobile, e.title, e.date, e.location, e.img FROM bookings b JOIN events e ON b.event_id = e.id WHERE b.user_id = ? ORDER BY b.booking_date DESC';
+        const targetUserId = req.user.role === 'admin' && requestedUserId ? requestedUserId : userId;
         
-        const [bookings] = await db.query(query, [userId]);
-        
-        const transformed = bookings.map(booking => {
-            let seatsArray = [];
-            try {
-                if (hasSeatsColumn && booking.seats !== undefined && booking.seats !== null && booking.seats !== '') {
-                    if (typeof booking.seats === 'string') {
-                        try {
-                            seatsArray = JSON.parse(booking.seats);
-                        } catch (parseError) {
-                            seatsArray = booking.seats.split(',').map(s => s.trim()).filter(Boolean);
-                        }
-                    } else if (Array.isArray(booking.seats)) {
-                        seatsArray = booking.seats;
-                    }
-                    seatsArray = seatsArray.map(seat => Number(seat)).filter(seat => !isNaN(seat) && seat > 0);
-                }
-            } catch (e) {
-                seatsArray = [];
-            }
-            return {
-                id: booking.id,
-                eventId: Number(booking.event_id),
-                userId: Number(booking.user_id),
-                seats: seatsArray,
-                quantity: booking.quantity,
-                totalAmount: booking.total_amount,
-                status: booking.status || 'pending',
-                createdAt: booking.booking_date || booking.created_at,
-                name: booking.name,
-                email: booking.email,
-                mobile: booking.mobile
-            };
+        const [bookings] = await db.query(
+            'SELECT b.*, e.title, e.date, e.location, e.img FROM bookings b JOIN events e ON b.event_id = e.id WHERE b.user_id = ? ORDER BY b.booking_date DESC',
+            [targetUserId]
+        );
+
+        const transformed = bookings.map(transformBooking);
+
+        return res.status(200).json({
+            success: true,
+            message: 'User bookings fetched successfully',
+            data: transformed
         });
-        
-        res.json(transformed);
     } catch (error) {
-        console.error('Get user bookings error:', error);
-        res.status(500).json({ message: 'Server error', error: error.message });
+        console.error('Get user bookings error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while fetching user bookings'
+        });
     }
 };
 
-exports.getBookingById = async (req, res) => {
-    const { id } = req.params;
+export const getBookingById = async (req, res) => {
     try {
+        const { id } = req.params;
+        
         const [bookings] = await db.query(
             'SELECT b.*, e.title, e.date, e.location, e.img FROM bookings b JOIN events e ON b.event_id = e.id WHERE b.id = ?',
             [id]
         );
-        
+
         if (bookings.length === 0) {
-            return res.status(404).json({ message: 'Booking not found' });
+            return res.status(404).json({
+                success: false,
+                message: 'Booking not found'
+            });
         }
-        
-        const booking = bookings[0];
-        let seatsArray = [];
-        try {
-            if (booking.seats !== undefined && booking.seats !== null) {
-                seatsArray = typeof booking.seats === 'string' ? JSON.parse(booking.seats) : booking.seats;
-                if (!Array.isArray(seatsArray)) {
-                    seatsArray = [];
-                }
-            }
-        } catch (e) {
-            seatsArray = [];
-        }
-        res.json({
-            id: booking.id,
-            eventId: booking.event_id,
-            userId: booking.user_id,
-            seats: seatsArray,
-            quantity: booking.quantity,
-            totalAmount: booking.total_amount,
-            status: booking.status || 'pending',
-            createdAt: booking.booking_date || booking.created_at,
-            name: booking.name,
-            email: booking.email,
-            mobile: booking.mobile
+
+        return res.status(200).json({
+            success: true,
+            message: 'Booking fetched successfully',
+            data: transformBooking(bookings[0])
         });
     } catch (error) {
-        console.error('Get booking error:', error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Get booking by id error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while fetching booking'
+        });
     }
 };
 
-exports.updateBooking = async (req, res) => {
-    const { id } = req.params;
-    const { status } = req.body;
-    
+export const updateBooking = async (req, res) => {
     try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        if (!status) {
+            return res.status(400).json({
+                success: false,
+                message: 'Status is required'
+            });
+        }
+
         await db.query('UPDATE bookings SET status = ? WHERE id = ?', [status, id]);
-        const [bookings] = await db.query('SELECT b.*, e.title, e.date, e.location, e.img FROM bookings b JOIN events e ON b.event_id = e.id WHERE b.id = ?', [id]);
         
+        const [bookings] = await db.query(
+            'SELECT b.*, e.title, e.date, e.location, e.img FROM bookings b JOIN events e ON b.event_id = e.id WHERE b.id = ?',
+            [id]
+        );
+
         if (bookings.length === 0) {
-            return res.status(404).json({ message: 'Booking not found' });
+            return res.status(404).json({
+                success: false,
+                message: 'Booking not found'
+            });
         }
-        
-        const booking = bookings[0];
-        let seatsArray = [];
-        try {
-            if (booking.seats !== undefined && booking.seats !== null) {
-                seatsArray = typeof booking.seats === 'string' ? JSON.parse(booking.seats) : booking.seats;
-                if (!Array.isArray(seatsArray)) {
-                    seatsArray = [];
-                }
-            }
-        } catch (e) {
-            seatsArray = [];
-        }
-        res.json({
-            id: booking.id,
-            eventId: booking.event_id,
-            userId: booking.user_id,
-            seats: seatsArray,
-            quantity: booking.quantity,
-            totalAmount: booking.total_amount,
-            status: booking.status || 'pending',
-            createdAt: booking.booking_date || booking.created_at,
-            name: booking.name,
-            email: booking.email,
-            mobile: booking.mobile
+
+        return res.status(200).json({
+            success: true,
+            message: 'Booking updated successfully',
+            data: transformBooking(bookings[0])
         });
     } catch (error) {
-        console.error('Update booking error:', error);
-        res.status(500).json({ message: 'Server error' });
+        console.error('Update booking error:', error?.message);
+        return res.status(500).json({
+            success: false,
+            message: error?.message || 'Server error while updating booking'
+        });
     }
-}
+};
